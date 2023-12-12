@@ -12,7 +12,8 @@ TOP_MODULE = simple_module
 # Source files
 VERILOG_SRC = simple_module.v
 # TB_SRC = tb_simple_module.cpp
-TB_SRC = tb_simple.cpp
+# TB_SRC = tb_simple.cpp
+TB_SRC = Server.cpp
 
 # Directory for object files
 OBJ_DIR = obj_dir

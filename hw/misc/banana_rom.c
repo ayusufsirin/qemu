@@ -3,80 +3,74 @@
 #include "hw/sysbus.h" /* provides all sysbus registering func */
 #include "hw/misc/banana_rom.h"
 
-#include "hw/fpga/simple_module/obj_dir/Vsimple_module.h"
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <unistd.h>
+#include <string.h> // For memset
+
+static int createSocket(void) {
+    int sock = 0;
+    struct sockaddr_in serv_addr;
+    memset(&serv_addr, 0, sizeof(serv_addr)); // Initialize serv_addr
+
+    if ((sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+        printf("\n Socket creation error \n");
+        return -1;
+    }
+
+    serv_addr.sin_family = AF_INET;
+    serv_addr.sin_port = htons(8080);
+
+    if (inet_pton(AF_INET, "127.0.0.1", &serv_addr.sin_addr) <= 0) {
+        printf("\nInvalid address/ Address not supported \n");
+        close(sock);
+        return -1;
+    }
+
+    if (connect(sock, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
+        printf("\nConnection Failed \n");
+        close(sock);
+        return -1;
+    }
+    return sock;
+}
 
 #define TYPE_BANANA_ROM "banana_rom"
 typedef struct BananaRomState BananaRomState;
 DECLARE_INSTANCE_CHECKER(BananaRomState, BANANA_ROM, TYPE_BANANA_ROM)
 
 #define REG_ID 	0x0
-#define REG_COUNTER 0x08
 #define CHIP_ID	0xBA000001
 
 struct BananaRomState {
 	SysBusDevice parent_obj;
 	MemoryRegion iomem;
 	uint64_t chip_id;
-
-	Vsimple_module *verilated_module;
-	bool enable;
 };
 
-static uint64_t banana_rom_read(void *opaque, hwaddr addr, unsigned int size)
-{
-	BananaRomState *s = opaque;
-
-	s->verilated_module->clk = 1;
-    s->verilated_module->eval();
-    s->verilated_module->clk = 0;
-    s->verilated_module->eval();
-
-	switch (addr) {
-	case REG_ID:
-		return s->chip_id;
-		break;
-
-	case REG_COUNTER:
-        return s->verilated_module->counter;
-        break;
-
-	default:
-		return 0xDEADBEEF;
-		break;
-	}
-
-	return 0;
-}
-
-static void banana_rom_write(void *opaque, hwaddr addr, uint64_t value, unsigned size)
-{
-    BananaRomState *s = opaque;
-
-    switch (addr) {
-    case REG_ENABLE:
-        s->enable = value;
-        s->verilated_module->enable = s->enable;
-        break;
-
-    default:
-        // Handle other writes or ignore
-        break;
+static uint64_t banana_rom_read(void *opaque, hwaddr addr, unsigned int size) {
+    int sock = createSocket();
+    if (sock < 0) {
+        return 0;
     }
-}
 
-static void banana_rom_reset(DeviceState *dev)
-{
-    BananaRomState *s = BANANA_ROM(dev);
+    const char* command = "read_reg";
+    send(sock, command, strlen(command), 0);
 
-    s->verilated_module->reset = 1;
-    s->verilated_module->eval();
-    s->verilated_module->reset = 0;
-    s->verilated_module->eval();
+    int value = 0;
+    ssize_t ret = read(sock, &value, sizeof(value));
+    if (ret < 0) {
+        // Handle read error
+        perror("Read failed");
+    }
+
+    close(sock);
+    return value;
 }
 
 static const MemoryRegionOps banana_rom_ops = {
 	.read = banana_rom_read,
-	.write = banana_rom_write,
 	.endianness = DEVICE_NATIVE_ENDIAN,
 };
 
@@ -89,8 +83,6 @@ static void banana_rom_instance_init(Object *obj)
 	sysbus_init_mmio(SYS_BUS_DEVICE(obj), &s->iomem);
 
 	s->chip_id = CHIP_ID;
-	s->verilated_module = new Vsimple_module();
-    s->enable = false;
 }
 
 /* create a new type to define the info related to our device */
@@ -99,7 +91,6 @@ static const TypeInfo banana_rom_info = {
 	.parent = TYPE_SYS_BUS_DEVICE,
 	.instance_size = sizeof(BananaRomState),
 	.instance_init = banana_rom_instance_init,
-	.reset = banana_rom_reset,
 };
 
 static void banana_rom_register_types(void)
